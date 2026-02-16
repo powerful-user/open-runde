@@ -6,7 +6,20 @@ Generates Open Runde font files from [Inter](https://github.com/rsms/inter) sour
 
 - Python 3.9+
 - Dependencies: `pip install -r requirements.txt`
-- Inter v4.1 static TTF files in `build/inter-source/` (download from [Inter releases](https://github.com/rsms/inter/releases))
+- Inter static TTF files in `build/inter-source/` (see download script below)
+- `gh` CLI (for `download_inter.sh`)
+
+## Download Inter Source Fonts
+
+```bash
+# Download latest Inter release
+./download_inter.sh
+
+# Download a specific version
+./download_inter.sh v4.1
+```
+
+This fetches all 18 static TTFs (9 roman + 9 italic) from the [Inter GitHub releases](https://github.com/rsms/inter/releases) into `build/inter-source/`.
 
 ## Usage
 
