@@ -40,7 +40,7 @@ VARIANTS = [
     (300, "Light",             "Light",             False, "Inter-Light.ttf"),
     (400, "Regular",           "Regular",           False, "Inter-Regular.ttf"),
     (500, "Medium",            "Medium",            False, "Inter-Medium.ttf"),
-    (600, "Semibold",          "SemiBold",          False, "Inter-SemiBold.ttf"),
+    (600, "SemiBold",          "SemiBold",          False, "Inter-SemiBold.ttf"),
     (700, "Bold",              "Bold",              False, "Inter-Bold.ttf"),
     (800, "ExtraBold",         "ExtraBold",         False, "Inter-ExtraBold.ttf"),
     (900, "Black",             "Black",             False, "Inter-Black.ttf"),
@@ -270,6 +270,37 @@ class TestWeightMetadata:
         actual = style_record.toUnicode()
         assert actual == style_name, (
             f"styleName: expected '{style_name}', got '{actual}'"
+        )
+
+    def test_name_table_has_required_ids(self, gen_font, variant):
+        """Font Book needs nameIDs 1-6 to display the font correctly."""
+        _, suffix, _, _, _ = variant
+        name_table = gen_font["name"]
+        required = {
+            1: "familyName",
+            2: "styleName",
+            3: "uniqueFontIdentifier",
+            4: "fullName",
+            5: "version",
+            6: "psName",
+        }
+        for name_id, label in required.items():
+            record = name_table.getName(name_id, 3, 1, 0x0409)
+            assert record is not None, (
+                f"{suffix}: missing nameID {name_id} ({label})"
+            )
+            assert len(record.toUnicode()) > 0, (
+                f"{suffix}: empty nameID {name_id} ({label})"
+            )
+
+    def test_postscript_name(self, gen_font, variant):
+        _, suffix, _, _, _ = variant
+        name_table = gen_font["name"]
+        ps_record = name_table.getName(6, 3, 1, 0x0409)
+        assert ps_record is not None
+        expected = f"OpenRunde-{suffix}"
+        assert ps_record.toUnicode() == expected, (
+            f"psName: expected '{expected}', got '{ps_record.toUnicode()}'"
         )
 
 

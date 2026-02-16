@@ -392,9 +392,16 @@ def process_font(weight: int, output_dir: Path = None, italic: bool = False):
             ps_name = f"OpenRunde-{weight_name}"
             style_name = weight_name
 
+    version_string = "Version 1.100"
+    unique_id = f"1.100;ORND;{ps_name}"
+
     fb.setupNameTable({
         "familyName": family_name,
         "styleName": style_name,
+        "uniqueFontIdentifier": unique_id,
+        "fullName": full_name,
+        "version": version_string,
+        "psName": ps_name,
     })
 
     # Metrics from source, scaled
