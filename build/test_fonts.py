@@ -33,7 +33,7 @@ SCALE_FACTOR = 2816 / 2048  # 1.375
 # Variant definitions
 # --------------------------------------------------------------------------- #
 
-# (weight_class, output_suffix, style_name, is_italic, inter_filename)
+# (weight_class, output_suffix, typo_subfamily, is_italic, inter_filename)
 VARIANTS = [
     (100, "Thin",              "Thin",              False, "Inter-Thin.ttf"),
     (200, "ExtraLight",        "ExtraLight",        False, "Inter-ExtraLight.ttf"),
@@ -54,6 +54,18 @@ VARIANTS = [
     (800, "ExtraBoldItalic",   "ExtraBold Italic",  True,  "Inter-ExtraBoldItalic.ttf"),
     (900, "BlackItalic",       "Black Italic",      True,  "Inter-BlackItalic.ttf"),
 ]
+
+
+def expected_ribbi_style(weight, is_italic):
+    """Derive the RIBBI nameID 2 value from weight and italic flag."""
+    is_bold = weight == 700
+    if is_bold and is_italic:
+        return "Bold Italic"
+    elif is_bold:
+        return "Bold"
+    elif is_italic:
+        return "Italic"
+    return "Regular"
 
 VARIANT_IDS = [v[1] for v in VARIANTS]
 
@@ -261,16 +273,45 @@ class TestWeightMetadata:
         weight_class, _, _, _, _ = variant
         assert gen_font["OS/2"].usWeightClass == weight_class
 
-    def test_style_name(self, gen_font, variant):
-        _, _, style_name, _, _ = variant
+    def test_ribbi_style_name(self, gen_font, variant):
+        """nameID 2 must be one of Regular/Bold/Italic/Bold Italic."""
+        weight, _, _, is_italic, _ = variant
         name_table = gen_font["name"]
-        # nameID 2 is the style/subfamily name
         style_record = name_table.getName(2, 3, 1, 0x0409)
         assert style_record is not None, "Missing nameID 2 (styleName)"
         actual = style_record.toUnicode()
-        assert actual == style_name, (
-            f"styleName: expected '{style_name}', got '{actual}'"
+        expected = expected_ribbi_style(weight, is_italic)
+        assert actual == expected, (
+            f"nameID 2: expected '{expected}', got '{actual}'"
         )
+
+    def test_typographic_names(self, gen_font, variant):
+        """
+        nameID 16/17 should be present for non-RIBBI weights to group the
+        family, and absent for RIBBI weights (400/700) where nameID 1/2
+        already provide correct grouping.
+        """
+        weight, _, typo_subfamily, _, _ = variant
+        name_table = gen_font["name"]
+        is_ribbi_weight = weight in (400, 700)
+
+        rec16 = name_table.getName(16, 3, 1, 0x0409)
+        rec17 = name_table.getName(17, 3, 1, 0x0409)
+
+        if is_ribbi_weight:
+            assert rec16 is None, (
+                f"RIBBI weight should not have nameID 16, got '{rec16.toUnicode()}'"
+            )
+            assert rec17 is None, (
+                f"RIBBI weight should not have nameID 17, got '{rec17.toUnicode()}'"
+            )
+        else:
+            assert rec16 is not None, "Missing nameID 16 (typographicFamily)"
+            assert rec16.toUnicode() == "Open Runde"
+            assert rec17 is not None, "Missing nameID 17 (typographicSubfamily)"
+            assert rec17.toUnicode() == typo_subfamily, (
+                f"nameID 17: expected '{typo_subfamily}', got '{rec17.toUnicode()}'"
+            )
 
     def test_name_table_has_required_ids(self, gen_font, variant):
         """Font Book needs nameIDs 1-6 to display the font correctly."""
@@ -308,7 +349,7 @@ class TestWeightMetadata:
 # 6. Italic vs roman metadata
 # --------------------------------------------------------------------------- #
 
-class TestItalicMetadata:
+class TestStyleMetadata:
 
     def test_italic_angle(self, gen_font, variant):
         _, _, _, is_italic, _ = variant
@@ -327,6 +368,28 @@ class TestItalicMetadata:
         else:
             assert not italic_bit, f"Roman font has fsSelection ITALIC bit (fs=0x{fs:04x})"
 
+    def test_fs_selection_bold_bit(self, gen_font, variant):
+        weight, _, _, _, _ = variant
+        fs = gen_font["OS/2"].fsSelection
+        bold_bit = fs & 0x0020
+        if weight == 700:
+            assert bold_bit, f"Bold font missing fsSelection BOLD bit (fs=0x{fs:04x})"
+        else:
+            assert not bold_bit, f"Non-bold font has fsSelection BOLD bit (fs=0x{fs:04x})"
+
+    def test_fs_selection_regular_bit(self, gen_font, variant):
+        weight, _, _, is_italic, _ = variant
+        fs = gen_font["OS/2"].fsSelection
+        regular_bit = fs & 0x0040
+        if weight == 400 and not is_italic:
+            assert regular_bit, f"Regular font missing fsSelection REGULAR bit (fs=0x{fs:04x})"
+        else:
+            assert not regular_bit, f"Non-regular font has fsSelection REGULAR bit (fs=0x{fs:04x})"
+
+    def test_fs_selection_use_typo_metrics(self, gen_font):
+        fs = gen_font["OS/2"].fsSelection
+        assert fs & 0x0080, f"Missing USE_TYPO_METRICS bit (fs=0x{fs:04x})"
+
     def test_mac_style_italic_bit(self, gen_font, variant):
         _, _, _, is_italic, _ = variant
         mac = gen_font["head"].macStyle
@@ -335,6 +398,15 @@ class TestItalicMetadata:
             assert italic_bit, f"Italic font missing macStyle ITALIC bit (mac=0x{mac:04x})"
         else:
             assert not italic_bit, f"Roman font has macStyle ITALIC bit (mac=0x{mac:04x})"
+
+    def test_mac_style_bold_bit(self, gen_font, variant):
+        weight, _, _, _, _ = variant
+        mac = gen_font["head"].macStyle
+        bold_bit = mac & 0x0001
+        if weight == 700:
+            assert bold_bit, f"Bold font missing macStyle BOLD bit (mac=0x{mac:04x})"
+        else:
+            assert not bold_bit, f"Non-bold font has macStyle BOLD bit (mac=0x{mac:04x})"
 
 
 # --------------------------------------------------------------------------- #

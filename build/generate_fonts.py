@@ -375,47 +375,89 @@ def process_font(weight: int, output_dir: Path = None, italic: bool = False):
     fb.setupCharacterMap(cmap)
 
     # Name table
-    family_name = "Open Runde"
+    #
+    # OpenType family grouping uses two levels:
+    #   nameID 1/2  — "RIBBI" grouping: nameID 2 must be one of
+    #                  Regular, Bold, Italic, Bold Italic.
+    #                  Non-RIBBI weights fold into nameID 1
+    #                  (e.g. "Open Runde Thin" + "Regular").
+    #   nameID 16/17 — Typographic family: groups ALL weights under one
+    #                   family name so Font Book shows a single entry
+    #                   with a style dropdown.
+    #
+    typo_family = "Open Runde"
+
     if italic:
-        style_name = config["name"]  # e.g. "Bold Italic" or "Italic"
-        ps_suffix = config["suffix"]  # e.g. "BoldItalic" or "Italic"
-        full_name = f"{family_name} {style_name}"
-        ps_name = f"OpenRunde-{ps_suffix}"
+        ps_suffix = config["suffix"]        # e.g. "BoldItalic"
+        typo_subfamily = config["name"]     # e.g. "Bold Italic"
     else:
-        weight_name = config["name"]
-        if weight_name == "Regular":
-            full_name = family_name
-            ps_name = "OpenRunde-Regular"
-            style_name = "Regular"
-        else:
-            full_name = f"{family_name} {weight_name}"
-            ps_name = f"OpenRunde-{weight_name}"
-            style_name = weight_name
+        weight_name = config["name"]        # e.g. "Bold", "Regular"
+        ps_suffix = weight_name
+        typo_subfamily = weight_name
+
+    ps_name = f"OpenRunde-{ps_suffix}"
+    full_name = f"{typo_family} {typo_subfamily}" if typo_subfamily != "Regular" else typo_family
+
+    # Determine RIBBI nameID 1/2 values
+    is_bold = weight == 700
+    ribbi_style = ""
+    if is_bold and italic:
+        ribbi_style = "Bold Italic"
+    elif is_bold:
+        ribbi_style = "Bold"
+    elif italic:
+        ribbi_style = "Italic"
+    else:
+        ribbi_style = "Regular"
+
+    # For non-RIBBI weights, fold the weight name into nameID 1
+    if weight in (400, 700):
+        ribbi_family = typo_family  # "Open Runde"
+    else:
+        # e.g. "Open Runde Thin", "Open Runde SemiBold"
+        ribbi_family = f"{typo_family} {config['name'].replace(' Italic', '').replace('Italic', '').strip() or config['name']}"
+        if not ribbi_family.strip():
+            ribbi_family = typo_family
 
     version_string = "Version 1.100"
     unique_id = f"1.100;ORND;{ps_name}"
 
-    fb.setupNameTable({
-        "familyName": family_name,
-        "styleName": style_name,
+    name_entries = {
+        "familyName": ribbi_family,
+        "styleName": ribbi_style,
         "uniqueFontIdentifier": unique_id,
         "fullName": full_name,
         "version": version_string,
         "psName": ps_name,
-    })
+    }
+
+    # Only add nameID 16/17 when they differ from nameID 1/2.
+    # Redundant entries confuse some renderers including macOS Font Book.
+    is_ribbi_weight = weight in (400, 700)
+    if not is_ribbi_weight:
+        name_entries["typographicFamily"] = typo_family
+        name_entries["typographicSubfamily"] = typo_subfamily
+
+    fb.setupNameTable(name_entries)
 
     # Metrics from source, scaled
     head = source_font["head"]
     os2 = source_font["OS/2"]
     hhea = source_font["hhea"]
 
+    # macStyle: bit 0 = BOLD, bit 1 = ITALIC
+    mac_style = 0
+    if is_bold:
+        mac_style |= 0x0001
+    if italic:
+        mac_style |= 0x0002
+
     head_kwargs = dict(
         unitsPerEm=TARGET_UPM,
         created=head.created,
         modified=head.modified,
+        macStyle=mac_style,
     )
-    if italic:
-        head_kwargs["macStyle"] = 0x0002  # bit 1 = ITALIC
     fb.setupHead(**head_kwargs)
 
     # Scale horizontal metrics
@@ -430,6 +472,15 @@ def process_font(weight: int, output_dir: Path = None, italic: bool = False):
         descent=round(hhea.descent * SCALE_FACTOR),
     )
 
+    # fsSelection: bit 0 = ITALIC, bit 5 = BOLD, bit 6 = REGULAR, bit 7 = USE_TYPO_METRICS
+    fs_selection = 0x0080  # USE_TYPO_METRICS always set
+    if italic:
+        fs_selection |= 0x0001
+    if is_bold:
+        fs_selection |= 0x0020
+    if weight == 400 and not italic:
+        fs_selection |= 0x0040  # REGULAR
+
     os2_kwargs = dict(
         sTypoAscender=round(os2.sTypoAscender * SCALE_FACTOR),
         sTypoDescender=round(os2.sTypoDescender * SCALE_FACTOR),
@@ -440,10 +491,8 @@ def process_font(weight: int, output_dir: Path = None, italic: bool = False):
         sCapHeight=round(os2.sCapHeight * SCALE_FACTOR),
         usWeightClass=weight,
         fsType=0,  # Installable embedding
+        fsSelection=fs_selection,
     )
-    if italic:
-        # bit 0 = ITALIC, bit 7 = USE_TYPO_METRICS
-        os2_kwargs["fsSelection"] = 0x0081
     fb.setupOS2(**os2_kwargs)
 
     post_kwargs = dict(
@@ -458,7 +507,7 @@ def process_font(weight: int, output_dir: Path = None, italic: bool = False):
     # Setup CFF
     fb.setupCFF(
         psName=ps_name,
-        fontInfo={"FullName": full_name, "FamilyName": family_name},
+        fontInfo={"FullName": full_name, "FamilyName": typo_family},
         charStringsDict=charstrings,
         privateDict={},
     )
