@@ -1,3 +1,4 @@
 **/*.glyphspackage/UIState.plist
 **/*(Autosaved).glyphs
 .DS_Store
+build/inter-source/
