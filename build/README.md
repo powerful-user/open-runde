@@ -11,14 +11,20 @@ Generates Open Runde font files from [Inter](https://github.com/rsms/inter) sour
 ## Usage
 
 ```bash
-# Generate missing weights (Thin, ExtraLight, Light, ExtraBold, Black)
+# Generate missing roman weights (Thin, ExtraLight, Light, ExtraBold, Black)
 python generate_fonts.py
 
-# Generate specific weights
+# Generate specific weights (roman + italic)
 python generate_fonts.py --weights 100 300 900
 
-# Regenerate all 9 weights
+# Regenerate all 9 weights (roman + italic)
 python generate_fonts.py --all
+
+# Generate only roman variants
+python generate_fonts.py --roman --all
+
+# Generate only italic variants
+python generate_fonts.py --italic --all
 
 # Run calibration (compare generated Regular against existing)
 python generate_fonts.py --calibrate

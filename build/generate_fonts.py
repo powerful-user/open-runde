@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from fontTools.ttLib import TTFont
-from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.recordingPen import RecordingPen, DecomposingRecordingPen
 from fontTools.pens.t2CharStringPen import T2CharStringPen
 from fontTools.fontBuilder import FontBuilder
 
@@ -50,6 +50,19 @@ WEIGHT_CONFIG = {
     900: {"name": "Black",      "inter_file": "Inter-Black.ttf",      "radius": 120},
 }
 
+# Italic weight configuration (same radii as roman)
+ITALIC_WEIGHT_CONFIG = {
+    100: {"name": "Thin Italic",       "suffix": "ThinItalic",       "inter_file": "Inter-ThinItalic.ttf",       "radius": 60},
+    200: {"name": "ExtraLight Italic", "suffix": "ExtraLightItalic", "inter_file": "Inter-ExtraLightItalic.ttf", "radius": 70},
+    300: {"name": "Light Italic",      "suffix": "LightItalic",      "inter_file": "Inter-LightItalic.ttf",      "radius": 80},
+    400: {"name": "Italic",            "suffix": "Italic",           "inter_file": "Inter-Italic.ttf",           "radius": 90},
+    500: {"name": "Medium Italic",     "suffix": "MediumItalic",     "inter_file": "Inter-MediumItalic.ttf",     "radius": 100},
+    600: {"name": "SemiBold Italic",   "suffix": "SemiBoldItalic",   "inter_file": "Inter-SemiBoldItalic.ttf",   "radius": 110},
+    700: {"name": "Bold Italic",       "suffix": "BoldItalic",       "inter_file": "Inter-BoldItalic.ttf",       "radius": 110},
+    800: {"name": "ExtraBold Italic",  "suffix": "ExtraBoldItalic",  "inter_file": "Inter-ExtraBoldItalic.ttf",  "radius": 115},
+    900: {"name": "Black Italic",      "suffix": "BlackItalic",      "inter_file": "Inter-BlackItalic.ttf",      "radius": 120},
+}
+
 # Only generate these by default (the missing weights)
 DEFAULT_WEIGHTS = [100, 200, 300, 800, 900]
 
@@ -75,9 +88,10 @@ def extract_contours(font, glyph_name):
         return []
 
     if glyph.numberOfContours == -1:
-        # Composite glyph - decompose it
-        rec = RecordingPen()
-        glyph.draw(rec, glyf)
+        # Composite glyph - decompose via glyphSet to flatten components
+        glyphSet = font.getGlyphSet()
+        rec = DecomposingRecordingPen(glyphSet)
+        glyphSet[glyph_name].draw(rec)
         return _parse_recording(rec)
 
     # Simple glyph - extract directly from coordinates
@@ -225,7 +239,16 @@ def _parse_recording(rec):
                           p2[1] + 2/3 * (p1[1] - p2[1]))
                     current_segments.append(Segment('curve', [c1, c2, p2]))
         elif op in ('closePath', 'endPath'):
-            pass
+            if current_start is not None and current_segments:
+                # Add explicit closing segment if last endpoint != start
+                last_pt = current_segments[-1].endpoint
+                dist = math.sqrt((last_pt[0] - current_start[0])**2 +
+                                 (last_pt[1] - current_start[1])**2)
+                if dist > 0.5:
+                    current_segments.append(Segment('line', [current_start]))
+                contours.append((current_start, current_segments))
+                current_start = None
+                current_segments = []
 
     if current_start is not None:
         contours.append((current_start, current_segments))
@@ -260,13 +283,16 @@ def contours_to_charstring(contours, width):
     return pen.getCharString()
 
 
-def process_font(weight: int, output_dir: Path = None):
+def process_font(weight: int, output_dir: Path = None, italic: bool = False):
     """
     Process an Inter font file to create an Open Runde variant.
 
     Returns the path to the generated OTF file.
     """
-    config = WEIGHT_CONFIG[weight]
+    if italic:
+        config = ITALIC_WEIGHT_CONFIG[weight]
+    else:
+        config = WEIGHT_CONFIG[weight]
     inter_path = INTER_SOURCE_DIR / config["inter_file"]
 
     if not inter_path.exists():
@@ -349,18 +375,26 @@ def process_font(weight: int, output_dir: Path = None):
     fb.setupCharacterMap(cmap)
 
     # Name table
-    weight_name = config["name"]
     family_name = "Open Runde"
-    if weight_name == "Regular":
-        full_name = family_name
-        ps_name = "OpenRunde-Regular"
+    if italic:
+        style_name = config["name"]  # e.g. "Bold Italic" or "Italic"
+        ps_suffix = config["suffix"]  # e.g. "BoldItalic" or "Italic"
+        full_name = f"{family_name} {style_name}"
+        ps_name = f"OpenRunde-{ps_suffix}"
     else:
-        full_name = f"{family_name} {weight_name}"
-        ps_name = f"OpenRunde-{weight_name}"
+        weight_name = config["name"]
+        if weight_name == "Regular":
+            full_name = family_name
+            ps_name = "OpenRunde-Regular"
+            style_name = "Regular"
+        else:
+            full_name = f"{family_name} {weight_name}"
+            ps_name = f"OpenRunde-{weight_name}"
+            style_name = weight_name
 
     fb.setupNameTable({
         "familyName": family_name,
-        "styleName": weight_name,
+        "styleName": style_name,
     })
 
     # Metrics from source, scaled
@@ -368,11 +402,14 @@ def process_font(weight: int, output_dir: Path = None):
     os2 = source_font["OS/2"]
     hhea = source_font["hhea"]
 
-    fb.setupHead(
+    head_kwargs = dict(
         unitsPerEm=TARGET_UPM,
         created=head.created,
         modified=head.modified,
     )
+    if italic:
+        head_kwargs["macStyle"] = 0x0002  # bit 1 = ITALIC
+    fb.setupHead(**head_kwargs)
 
     # Scale horizontal metrics
     scaled_hmtx = {}
@@ -386,7 +423,7 @@ def process_font(weight: int, output_dir: Path = None):
         descent=round(hhea.descent * SCALE_FACTOR),
     )
 
-    fb.setupOS2(
+    os2_kwargs = dict(
         sTypoAscender=round(os2.sTypoAscender * SCALE_FACTOR),
         sTypoDescender=round(os2.sTypoDescender * SCALE_FACTOR),
         sTypoLineGap=round(os2.sTypoLineGap * SCALE_FACTOR),
@@ -397,12 +434,19 @@ def process_font(weight: int, output_dir: Path = None):
         usWeightClass=weight,
         fsType=0,  # Installable embedding
     )
+    if italic:
+        # bit 0 = ITALIC, bit 7 = USE_TYPO_METRICS
+        os2_kwargs["fsSelection"] = 0x0081
+    fb.setupOS2(**os2_kwargs)
 
-    fb.setupPost(
+    post_kwargs = dict(
         isFixedPitch=0,
         underlinePosition=round(-200 * SCALE_FACTOR),
         underlineThickness=round(100 * SCALE_FACTOR),
     )
+    if italic:
+        post_kwargs["italicAngle"] = -9.4
+    fb.setupPost(**post_kwargs)
 
     # Setup CFF
     fb.setupCFF(
@@ -420,7 +464,8 @@ def process_font(weight: int, output_dir: Path = None):
         output_dir = DESKTOP_DIR
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    otf_filename = f"OpenRunde-{weight_name}.otf"
+    file_suffix = config["suffix"] if italic else config["name"]
+    otf_filename = f"OpenRunde-{file_suffix}.otf"
     otf_path = output_dir / otf_filename
 
     fb.font.save(str(otf_path))
@@ -453,7 +498,7 @@ def generate_woff2(otf_path: Path):
     return woff2_path
 
 
-def generate_glyphs(otf_path: Path, weight: int):
+def generate_glyphs(otf_path: Path, weight: int, italic: bool = False):
     """Generate .glyphs file from OTF."""
     try:
         from glyphsLib import GSFont, GSGlyph, GSLayer, GSPath, GSNode, GSFontMaster
@@ -461,7 +506,7 @@ def generate_glyphs(otf_path: Path, weight: int):
         print("  WARNING: glyphsLib not available, skipping .glyphs generation")
         return None
 
-    config = WEIGHT_CONFIG[weight]
+    config = ITALIC_WEIGHT_CONFIG[weight] if italic else WEIGHT_CONFIG[weight]
     font = TTFont(str(otf_path))
 
     gs_font = GSFont()
@@ -481,6 +526,8 @@ def generate_glyphs(otf_path: Path, weight: int):
     master.xHeight = round(font["OS/2"].sxHeight)
     master.userData["GSCornerRadius"] = config["radius"]
     master.weightValue = weight
+    if italic:
+        master.italicAngle = -9.4
     gs_font.masters.append(master)
 
     # Add glyphs
@@ -547,7 +594,8 @@ def generate_glyphs(otf_path: Path, weight: int):
         gs_glyph.layers.append(layer)
         gs_font.glyphs.append(gs_glyph)
 
-    glyphs_path = GLYPHS_DIR / f"OpenRunde-{config['name']}.glyphs"
+    file_suffix = config["suffix"] if italic else config["name"]
+    glyphs_path = GLYPHS_DIR / f"OpenRunde-{file_suffix}.glyphs"
     GLYPHS_DIR.mkdir(parents=True, exist_ok=True)
     gs_font.save(str(glyphs_path))
     print(f"  Saved {glyphs_path}")
@@ -637,6 +685,10 @@ def main():
                        help="Skip WOFF generation")
     parser.add_argument("--no-glyphs", action="store_true",
                        help="Skip .glyphs generation")
+    parser.add_argument("--roman", action="store_true",
+                       help="Generate only roman (upright) variants")
+    parser.add_argument("--italic", action="store_true",
+                       help="Generate only italic variants")
     args = parser.parse_args()
 
     if args.calibrate:
@@ -645,29 +697,44 @@ def main():
 
     weights = args.weights or (ALL_WEIGHTS if args.all else DEFAULT_WEIGHTS)
 
-    print(f"Generating Open Runde for weights: {weights}")
+    # Determine which styles to generate
+    # If neither --roman nor --italic is specified, generate both
+    do_roman = not args.italic or args.roman
+    do_italic = not args.roman or args.italic
+
+    styles = []
+    if do_roman:
+        styles.append(("roman", False))
+    if do_italic:
+        styles.append(("italic", True))
+
+    style_labels = " + ".join(s[0] for s in styles)
+    print(f"Generating Open Runde ({style_labels}) for weights: {weights}")
     print(f"Scale: {INTER_UPM} → {TARGET_UPM} UPM (factor {SCALE_FACTOR})")
 
-    for weight in weights:
-        if weight not in WEIGHT_CONFIG:
-            print(f"\nERROR: Unknown weight {weight}")
-            continue
+    for style_label, is_italic in styles:
+        config_dict = ITALIC_WEIGHT_CONFIG if is_italic else WEIGHT_CONFIG
+        for weight in weights:
+            if weight not in config_dict:
+                print(f"\nERROR: Unknown weight {weight}")
+                continue
 
-        config = WEIGHT_CONFIG[weight]
-        print(f"\n{'='*60}")
-        print(f"Weight {weight} ({config['name']}), radius={config['radius']}")
-        print(f"{'='*60}")
+            config = config_dict[weight]
+            display_name = config["name"]
+            print(f"\n{'='*60}")
+            print(f"Weight {weight} ({display_name}), radius={config['radius']}")
+            print(f"{'='*60}")
 
-        otf_path = process_font(weight)
-        if otf_path is None:
-            continue
+            otf_path = process_font(weight, italic=is_italic)
+            if otf_path is None:
+                continue
 
-        if not args.no_woff:
-            generate_woff(otf_path)
-            generate_woff2(otf_path)
+            if not args.no_woff:
+                generate_woff(otf_path)
+                generate_woff2(otf_path)
 
-        if not args.no_glyphs:
-            generate_glyphs(otf_path, weight)
+            if not args.no_glyphs:
+                generate_glyphs(otf_path, weight, italic=is_italic)
 
     print(f"\n{'='*60}")
     print("Done! Generated fonts are in src/")

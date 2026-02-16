@@ -21,18 +21,18 @@ The typeface was initially called Inter Soft but was renamed to not conflict wit
 
 ## Design
 
-Open Runde is available in 9 weights. The original 4 weights (Regular–Bold) were made with the rounded corners tool of Glyphs Mini. The remaining 5 weights were generated using a Python build script that applies the same corner rounding algorithm to Inter's static font files.
+Open Runde is available in 9 weights, each with roman (upright) and italic variants — 18 fonts in total. The original 4 roman weights (Regular–Bold) were made with the rounded corners tool of Glyphs Mini. The remaining weights and all italic variants were generated using a Python build script that applies the same corner rounding algorithm to Inter's static font files.
 
-| Roman (upright) name | Weight
-| -------------------- | ------------
-| Thin                 | 100
-| Extra Light          | 200
-| Light                | 300
-| Regular              | 400
-| Medium               | 500
-| Semi Bold            | 600
-| Bold                 | 700
-| Extra Bold           | 800
-| Black                | 900
+| Name        | Weight | Roman | Italic |
+|-------------|--------|-------|--------|
+| Thin        | 100    | ✓     | ✓      |
+| Extra Light | 200    | ✓     | ✓      |
+| Light       | 300    | ✓     | ✓      |
+| Regular     | 400    | ✓     | ✓      |
+| Medium      | 500    | ✓     | ✓      |
+| Semi Bold   | 600    | ✓     | ✓      |
+| Bold        | 700    | ✓     | ✓      |
+| Extra Bold  | 800    | ✓     | ✓      |
+| Black       | 900    | ✓     | ✓      |
 
 
