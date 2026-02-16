@@ -467,7 +467,72 @@ class TestRoundingEvidence:
 
 
 # --------------------------------------------------------------------------- #
-# 8. Web font validation
+# 8. OpenType layout tables
+# --------------------------------------------------------------------------- #
+
+class TestLayoutTables:
+
+    def test_gdef_present(self, gen_font):
+        assert "GDEF" in gen_font, "Missing GDEF table"
+
+    def test_gsub_present(self, gen_font):
+        assert "GSUB" in gen_font, "Missing GSUB table"
+
+    def test_gpos_present(self, gen_font):
+        assert "GPOS" in gen_font, "Missing GPOS table"
+
+    def test_gsub_features_match_source(self, gen_font, src_font):
+        """Generated font should have the same GSUB features as its source."""
+        src_feats = set(fr.FeatureTag for fr in src_font["GSUB"].table.FeatureList.FeatureRecord)
+        gen_feats = set(fr.FeatureTag for fr in gen_font["GSUB"].table.FeatureList.FeatureRecord)
+        missing = src_feats - gen_feats
+        assert not missing, f"Missing GSUB features: {sorted(missing)}"
+
+    def test_gpos_features_match_source(self, gen_font, src_font):
+        """Generated font should have the same GPOS features as its source."""
+        src_feats = set(fr.FeatureTag for fr in src_font["GPOS"].table.FeatureList.FeatureRecord)
+        gen_feats = set(fr.FeatureTag for fr in gen_font["GPOS"].table.FeatureList.FeatureRecord)
+        missing = src_feats - gen_feats
+        assert not missing, f"Missing GPOS features: {sorted(missing)}"
+
+    def test_gpos_values_scaled(self, gen_font, src_font):
+        """Spot-check that GPOS mark anchors were scaled by 1.375."""
+        if "GPOS" not in src_font or "GPOS" not in gen_font:
+            pytest.skip("No GPOS tables")
+
+        # Find a MarkToBase anchor in source and generated
+        for src_lookup, gen_lookup in zip(
+            src_font["GPOS"].table.LookupList.Lookup,
+            gen_font["GPOS"].table.LookupList.Lookup,
+        ):
+            for src_st, gen_st in zip(src_lookup.SubTable, gen_lookup.SubTable):
+                # Unwrap extensions
+                src_lt = getattr(src_st, "LookupType", src_lookup.LookupType)
+                gen_lt = getattr(gen_st, "LookupType", gen_lookup.LookupType)
+                if src_lt == 9:
+                    src_st = src_st.ExtSubTable
+                    src_lt = src_st.LookupType
+                if gen_lt == 9:
+                    gen_st = gen_st.ExtSubTable
+                    gen_lt = gen_st.LookupType
+
+                if src_lt != 4:  # MarkToBase
+                    continue
+
+                src_anchor = src_st.BaseArray.BaseRecord[0].BaseAnchor[0]
+                gen_anchor = gen_st.BaseArray.BaseRecord[0].BaseAnchor[0]
+                if src_anchor and src_anchor.XCoordinate:
+                    expected_x = round(src_anchor.XCoordinate * SCALE_FACTOR)
+                    assert gen_anchor.XCoordinate == expected_x, (
+                        f"GPOS anchor X not scaled: src={src_anchor.XCoordinate}, "
+                        f"gen={gen_anchor.XCoordinate}, expected={expected_x}"
+                    )
+                    return  # one check is enough
+        pytest.skip("No MarkToBase lookup found to verify")
+
+
+# --------------------------------------------------------------------------- #
+# 9. Web font validation
 # --------------------------------------------------------------------------- #
 
 class TestWebFonts:
@@ -505,7 +570,7 @@ class TestWebFonts:
 
 
 # --------------------------------------------------------------------------- #
-# 9. Cross-weight consistency
+# 10. Cross-weight consistency
 # --------------------------------------------------------------------------- #
 
 class TestCrossWeightConsistency:

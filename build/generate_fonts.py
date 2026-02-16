@@ -9,6 +9,7 @@ Usage:
 """
 
 import argparse
+import copy
 import math
 import os
 import sys
@@ -283,6 +284,133 @@ def contours_to_charstring(contours, width):
     return pen.getCharString()
 
 
+def _scale_value_record(vr, factor):
+    """Scale all position/advance fields in a GPOS ValueRecord."""
+    if vr is None:
+        return
+    for attr in ("XPlacement", "YPlacement", "XAdvance", "YAdvance"):
+        val = getattr(vr, attr, None)
+        if val:
+            setattr(vr, attr, round(val * factor))
+
+
+def _scale_anchor(anchor, factor):
+    """Scale an anchor's coordinates."""
+    if anchor is None:
+        return
+    if hasattr(anchor, "XCoordinate") and anchor.XCoordinate:
+        anchor.XCoordinate = round(anchor.XCoordinate * factor)
+    if hasattr(anchor, "YCoordinate") and anchor.YCoordinate:
+        anchor.YCoordinate = round(anchor.YCoordinate * factor)
+
+
+def scale_gpos_table(gpos, factor):
+    """
+    Walk a GPOS table and scale all coordinate values by factor.
+
+    Handles all standard lookup types:
+      1 = SinglePos, 2 = PairPos, 3 = CursiveAttach,
+      4 = MarkToBase, 5 = MarkToLig, 6 = MarkToMark,
+      9 = Extension (unwraps and recurses)
+    """
+    if not gpos.table.LookupList:
+        return
+
+    for lookup in gpos.table.LookupList.Lookup:
+        _scale_gpos_lookup(lookup, factor)
+
+
+def _scale_gpos_lookup(lookup, factor):
+    """Scale a single GPOS lookup."""
+    for subtable in lookup.SubTable:
+        lt = subtable.LookupType if hasattr(subtable, "LookupType") else lookup.LookupType
+
+        if lt == 9:  # Extension — unwrap
+            _scale_gpos_lookup_subtable(subtable.ExtSubTable, subtable.ExtSubTable.LookupType, factor)
+        else:
+            _scale_gpos_lookup_subtable(subtable, lt, factor)
+
+
+def _scale_gpos_lookup_subtable(st, lookup_type, factor):
+    """Scale values in a single GPOS subtable by type."""
+
+    if lookup_type == 1:  # SinglePos
+        if st.Format == 1:
+            _scale_value_record(st.Value, factor)
+        elif st.Format == 2:
+            for vr in st.Value:
+                _scale_value_record(vr, factor)
+
+    elif lookup_type == 2:  # PairPos
+        if st.Format == 1:
+            for pairset in st.PairSet:
+                for pvr in pairset.PairValueRecord:
+                    _scale_value_record(pvr.Value1, factor)
+                    _scale_value_record(pvr.Value2, factor)
+        elif st.Format == 2:
+            for row in st.Class1Record:
+                for c2r in row.Class2Record:
+                    _scale_value_record(c2r.Value1, factor)
+                    _scale_value_record(c2r.Value2, factor)
+
+    elif lookup_type == 3:  # CursiveAttach
+        for record in st.EntryExitRecord:
+            _scale_anchor(record.EntryAnchor, factor)
+            _scale_anchor(record.ExitAnchor, factor)
+
+    elif lookup_type == 4:  # MarkToBase
+        for mark_record in st.MarkArray.MarkRecord:
+            _scale_anchor(mark_record.MarkAnchor, factor)
+        for base_record in st.BaseArray.BaseRecord:
+            for anchor in base_record.BaseAnchor:
+                _scale_anchor(anchor, factor)
+
+    elif lookup_type == 5:  # MarkToLig
+        for mark_record in st.MarkArray.MarkRecord:
+            _scale_anchor(mark_record.MarkAnchor, factor)
+        for lig_attach in st.LigatureArray.LigatureAttach:
+            for comp_record in lig_attach.ComponentRecord:
+                for anchor in comp_record.LigatureAnchor:
+                    _scale_anchor(anchor, factor)
+
+    elif lookup_type == 6:  # MarkToMark
+        for mark_record in st.Mark1Array.MarkRecord:
+            _scale_anchor(mark_record.MarkAnchor, factor)
+        for mark2_record in st.Mark2Array.Mark2Record:
+            for anchor in mark2_record.Mark2Anchor:
+                _scale_anchor(anchor, factor)
+
+
+def copy_layout_tables(source_font, target_font, factor):
+    """
+    Copy GDEF, GSUB, and GPOS tables from source to target font.
+
+    GDEF and GSUB are copied verbatim (they reference glyphs by index/name,
+    no coordinate values). GPOS is deep-copied and all position values are
+    scaled by factor to account for UPM change.
+    """
+    tables_copied = []
+
+    # GDEF — glyph class definitions, verbatim copy
+    if "GDEF" in source_font:
+        target_font["GDEF"] = copy.deepcopy(source_font["GDEF"])
+        tables_copied.append("GDEF")
+
+    # GSUB — substitution rules, verbatim copy
+    if "GSUB" in source_font:
+        target_font["GSUB"] = copy.deepcopy(source_font["GSUB"])
+        tables_copied.append("GSUB")
+
+    # GPOS — positioning rules, scale coordinates
+    if "GPOS" in source_font:
+        gpos = copy.deepcopy(source_font["GPOS"])
+        scale_gpos_table(gpos, factor)
+        target_font["GPOS"] = gpos
+        tables_copied.append("GPOS")
+
+    return tables_copied
+
+
 def process_font(weight: int, output_dir: Path = None, italic: bool = False):
     """
     Process an Inter font file to create an Open Runde variant.
@@ -512,8 +640,10 @@ def process_font(weight: int, output_dir: Path = None, italic: bool = False):
         privateDict={},
     )
 
-    # Setup features from source if available
-    # (simplified - just copy basic features)
+    # Copy OpenType layout tables (GDEF, GSUB, GPOS) from source
+    tables_copied = copy_layout_tables(source_font, fb.font, SCALE_FACTOR)
+    if tables_copied:
+        print(f"  Copied layout tables: {', '.join(tables_copied)}")
 
     # Output paths
     if output_dir is None:
